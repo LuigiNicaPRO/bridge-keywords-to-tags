@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Log file for debugging
+LOG_FILE="$HOME/bridge_app_launch.log"
+echo "[$(date)] Starting Bridge Keywords to Tags app" > "$LOG_FILE"
+
+# Get the directory containing this script
+APP_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+RESOURCES_DIR="$APP_DIR/../Resources"
+
+echo "[$(date)] APP_DIR: $APP_DIR" >> "$LOG_FILE"
+echo "[$(date)] RESOURCES_DIR: $RESOURCES_DIR" >> "$LOG_FILE"
+
+# Change to the Resources directory where Python scripts are located
+cd "$RESOURCES_DIR" 2>> "$LOG_FILE"
+
+echo "[$(date)] Current directory: $(pwd)" >> "$LOG_FILE"
+echo "[$(date)] Python: /opt/anaconda3/bin/python3" >> "$LOG_FILE"
+echo "[$(date)] Script: $RESOURCES_DIR/bridge_menubar.py" >> "$LOG_FILE"
+
+# Launch the menu bar app using anaconda python3 (which has the required packages)
+/opt/anaconda3/bin/python3 "$RESOURCES_DIR/bridge_menubar.py" >> "$LOG_FILE" 2>&1
