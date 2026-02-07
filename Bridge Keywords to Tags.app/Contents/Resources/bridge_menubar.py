@@ -357,7 +357,8 @@ class BridgeMenuBarApp(rumps.App):
             return
         
         # Use a simple shell command to launch and bring to front
-        cmd = f'cd "{script_path.parent}" && python3 "{script_path}" & sleep 0.5 && osascript -e \'tell application "Python" to activate\' 2>/dev/null || true'
+        # Use Anaconda Python which has working tkinter
+        cmd = f'cd "{script_path.parent}" && /opt/anaconda3/bin/python3 "{script_path}" & sleep 0.5 && osascript -e \'tell application "Python" to activate\' 2>/dev/null || true'
         subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
     @rumps.clicked("Process Current Directory")
