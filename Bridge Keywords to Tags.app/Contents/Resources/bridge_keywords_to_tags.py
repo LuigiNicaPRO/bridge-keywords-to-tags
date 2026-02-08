@@ -638,46 +638,74 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1
+            bufsize=0  # Unbuffered for immediate output
         )
         
         # Process file changes as they're detected
         for line in process.stdout:
             changed_path = Path(line.strip())
             
+            # Debug logging in service mode
+            if from_service:
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print(f"[{timestamp}] Detected change: {changed_path}")
+            
             # Skip if not a supported file
             if changed_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                if from_service:
+                    print(f"  → Skipped: unsupported extension {changed_path.suffix}")
                 continue
             
             # Skip if file doesn't exist (might have been deleted)
             if not changed_path.exists():
+                if from_service:
+                    print(f"  → Skipped: file doesn't exist")
                 continue
             
             # Check modification time to avoid duplicate processing
             try:
                 mtime = changed_path.stat().st_mtime
                 last_mtime = last_processed.get(changed_path, 0)
+                time_since_last = mtime - last_mtime
                 
-                # Only process if file was modified more than 1 second ago
-                # This helps avoid processing incomplete writes
-                if mtime - last_mtime < 1:
+                if from_service:
+                    print(f"  → mtime: {mtime}, last_mtime: {last_mtime}, diff: {time_since_last:.2f}s")
+                
+                # Skip if same modification time (duplicate event for same change)
+                if last_mtime > 0 and mtime == last_mtime:
+                    if from_service:
+                        print(f"  → Skipped: duplicate event (same mtime)")
                     continue
                 
                 last_processed[changed_path] = mtime
-            except OSError:
+            except OSError as e:
+                if from_service:
+                    print(f"  → Skipped: OSError {e}")
                 continue
             
             # Process the file
+            if from_service:
+                print(f"  → Processing file...")
+            
+            # Small delay to let Adobe Bridge finish writing XMP data
+            time.sleep(2)
+            
             success, keywords = process_file(changed_path, dry_run=False, merge=merge, strip_prefixes=strip_prefixes)
+            
+            if from_service:
+                print(f"  → Result: success={success}, keywords={keywords}")
             
             if success and keywords:
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                print(f"[{timestamp}] Updated: {changed_path.name}")
+                print(f"[{timestamp}] ✓ Synced: {changed_path.name} → {len(keywords)} tags")
                 if verbose:
                     print(f"  Tags: {', '.join(keywords)}")
             elif not success:
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                print(f"[{timestamp}] ERROR processing: {changed_path.name}")
+                print(f"[{timestamp}] ✗ ERROR processing: {changed_path.name}")
+            elif success and not keywords:
+                if from_service:
+                    print(f"  → No keywords to sync (file may lack marker keyword or have no keywords)")
     
     except KeyboardInterrupt:
         print("\n\nStopping file watcher...")
