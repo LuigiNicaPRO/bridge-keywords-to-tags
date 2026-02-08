@@ -196,31 +196,17 @@ def get_finder_tags(file_path: Path) -> list[str]:
 
 
 def set_finder_tags(file_path: Path, tags: list[str]) -> bool:
-    """Set Finder tags for a file."""
-    if not tags:
-        return True
-    
+    """Set or clear Finder tags for a file."""
     try:
-        # Format tags for Finder (each tag gets a color index, 0 = no color)
-        formatted_tags = [f"{tag}\n0" for tag in tags]
-        plist_data = plistlib.dumps(formatted_tags, fmt=plistlib.FMT_BINARY)
+        if not tags:
+            # Clear tags by removing the xattr
+            subprocess.run(
+                ['xattr', '-d', 'com.apple.metadata:_kMDItemUserTags', str(file_path)],
+                capture_output=True,  # Suppress error if attribute doesn't exist
+                check=False
+            )
+            return True
         
-        # Use xattr to set the tags
-        subprocess.run(
-            ['xattr', '-w', 'com.apple.metadata:_kMDItemUserTags', plist_data.hex(), str(file_path)],
-            check=True
-        )
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-
-def set_finder_tags_hex(file_path: Path, tags: list[str]) -> bool:
-    """Set Finder tags using hex encoding for xattr."""
-    if not tags:
-        return True
-    
-    try:
         formatted_tags = [f"{tag}\n0" for tag in tags]
         plist_data = plistlib.dumps(formatted_tags, fmt=plistlib.FMT_BINARY)
         
@@ -246,17 +232,16 @@ def process_file(file_path: Path, dry_run: bool = False, merge: bool = True, str
     
     Returns: (success, keywords_found)
     """
-    keywords = get_xmp_keywords(file_path, strip_prefixes=strip_prefixes, debug=debug)
+    # Get raw keywords first to check for marker (if needed)
+    raw_keywords = get_xmp_keywords(file_path, strip_prefixes=False, debug=debug)
     
-    if not keywords:
+    if not raw_keywords:
         if debug:
             print(f"  → No keywords found in file")
         return True, []
     
     # Check for marker keyword if configured
     if MARKER_KEYWORD:
-        # Get raw keywords without stripping to check for marker
-        raw_keywords = get_xmp_keywords(file_path, strip_prefixes=False, debug=debug)
         if debug:
             print(f"  → Checking for marker '{MARKER_KEYWORD}' in: {raw_keywords}")
         if MARKER_KEYWORD not in raw_keywords:
@@ -264,12 +249,22 @@ def process_file(file_path: Path, dry_run: bool = False, merge: bool = True, str
             if debug:
                 print(f"  → Marker keyword '{MARKER_KEYWORD}' not found, skipping file")
             return True, []
-        # Remove marker keyword from the tags to be set
+    
+    # Apply prefix stripping if needed
+    if strip_prefixes != STRIP_HIERARCHICAL_PREFIXES:
+        keywords = get_xmp_keywords(file_path, strip_prefixes=strip_prefixes, debug=debug)
+    else:
+        keywords = raw_keywords
+    
+    # Remove marker keyword from the tags to be set
+    if MARKER_KEYWORD:
         keywords = [k for k in keywords if k.lower() != MARKER_KEYWORD.lower()]
-        if not keywords:
+        if not keywords and merge:
+            # In merge mode, skip files with only marker keyword
             if debug:
-                print(f"  → No keywords left after removing marker keyword")
+                print(f"  → No keywords left after removing marker keyword (merge mode, skipping)")
             return True, []
+        # In replace mode, continue to clear tags if no keywords left
     
     if merge:
         existing_tags = get_finder_tags(file_path)
@@ -280,8 +275,45 @@ def process_file(file_path: Path, dry_run: bool = False, merge: bool = True, str
     if dry_run:
         return True, keywords
     
-    success = set_finder_tags_hex(file_path, all_tags)
+    success = set_finder_tags(file_path, all_tags)
     return success, keywords
+
+
+def process_xmp_sidecar(sidecar_path: Path, dry_run: bool = False, merge: bool = True, verbose: bool = False, strip_prefixes: bool = STRIP_HIERARCHICAL_PREFIXES) -> tuple[bool, int]:
+    """Process an XMP sidecar file and apply keywords to the main file.
+    
+    Returns: (success, tagged_count)
+    """
+    main_file = sidecar_path.with_suffix('')
+    if not main_file.exists():
+        return False, 0
+    
+    keywords = get_xmp_keywords(sidecar_path, strip_prefixes=strip_prefixes)
+    if not keywords:
+        return True, 0
+    
+    # Check for marker keyword if configured
+    if MARKER_KEYWORD:
+        raw_keywords = get_xmp_keywords(sidecar_path, strip_prefixes=False)
+        if MARKER_KEYWORD not in raw_keywords:
+            return True, 0
+        # Remove marker keyword from tags
+        keywords = [k for k in keywords if k.lower() != MARKER_KEYWORD.lower()]
+        if not keywords:
+            return True, 0
+    
+    if dry_run:
+        return True, 1
+    
+    if merge:
+        existing = get_finder_tags(main_file)
+        keywords = list(set(existing + keywords))
+    
+    success = set_finder_tags(main_file, keywords)
+    if verbose and success:
+        print(f"  {main_file.name} (from sidecar): {keywords}")
+    
+    return success, 1 if success else 0
 
 
 def process_folder(folder_path: Path, dry_run: bool = False, merge: bool = True, verbose: bool = False, strip_prefixes: bool = STRIP_HIERARCHICAL_PREFIXES):
@@ -298,31 +330,10 @@ def process_folder(folder_path: Path, dry_run: bool = False, merge: bool = True,
             if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 continue
             
-            # Skip XMP sidecar files (they contain metadata for other files)
+            # Process XMP sidecar files separately
             if file_path.suffix.lower() == '.xmp':
-                # Try to find the corresponding main file
-                main_file = file_path.with_suffix('')
-                if main_file.exists():
-                    keywords = get_xmp_keywords(file_path, strip_prefixes=strip_prefixes)
-                    if keywords:
-                        # Check for marker keyword if configured
-                        if MARKER_KEYWORD:
-                            raw_keywords = get_xmp_keywords(file_path, strip_prefixes=False)
-                            if MARKER_KEYWORD not in raw_keywords:
-                                continue
-                            # Remove marker keyword from tags
-                            keywords = [k for k in keywords if k.lower() != MARKER_KEYWORD.lower()]
-                            if not keywords:
-                                continue
-                        
-                        if not dry_run:
-                            if merge:
-                                existing = get_finder_tags(main_file)
-                                keywords = list(set(existing + keywords))
-                            set_finder_tags_hex(main_file, keywords)
-                            if verbose:
-                                print(f"  {main_file.name} (from sidecar): {keywords}")
-                            tagged += 1
+                success, count = process_xmp_sidecar(file_path, dry_run, merge, verbose, strip_prefixes)
+                tagged += count
                 continue
             
             processed += 1
