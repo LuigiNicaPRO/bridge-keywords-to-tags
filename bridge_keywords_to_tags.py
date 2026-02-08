@@ -647,6 +647,12 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
     pending_files = set()
     last_event_time = None
     
+    # Track session statistics for notifications
+    session_synced_count = 0
+    session_error_count = 0
+    processing_started = False
+    processing_start_time = None
+    
     # Initial scan of all directories
     print("Performing initial scan...")
     for watch_path in watch_paths:
@@ -725,6 +731,12 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
                 pending_files.add(changed_path)
                 last_event_time = time.time()
                 
+                # Send "Processing started" notification on first file detection
+                if from_service and not processing_started:
+                    processing_started = True
+                    processing_start_time = time.time()
+                    send_notification("Bridge Keywords Sync", "Processing started", "Syncing keywords to tags")
+                
             else:
                 # Timeout - no new events for 2 seconds
                 if pending_files and last_event_time:
@@ -735,13 +747,12 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
                         if from_service:
                             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             print(f"[{timestamp}] Processing {num_files} file(s)...")
-                            send_notification("Bridge Keywords Sync", f"Processing {num_files} file(s)...", "Syncing keywords to tags")
                         
                         # Build command to process all files
                         script_path = Path(__file__).resolve()
                         files_to_process = list(pending_files)
-                        synced_count = 0
-                        error_count = 0
+                        batch_synced = 0
+                        batch_errors = 0
                         
                         for file_path in files_to_process:
                             try:
@@ -760,28 +771,39 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
                                 if from_service:
                                     if result.returncode == 0 and 'Files with keywords: 1' in result.stdout:
                                         print(f"  ✓ Synced: {file_path.name}")
-                                        synced_count += 1
+                                        batch_synced += 1
                                     elif result.returncode == 0 and 'Files with keywords: 0' in result.stdout:
                                         # File processed but no keywords (tags cleared in replace mode)
-                                        synced_count += 1
+                                        batch_synced += 1
                                     elif result.returncode != 0:
                                         print(f"  ✗ ERROR: {file_path.name}")
-                                        error_count += 1
+                                        batch_errors += 1
                             except Exception as e:
                                 if from_service:
                                     print(f"  ✗ {file_path.name}: {str(e)[:100]}")
-                                    error_count += 1
+                                    batch_errors += 1
                         
-                        # Send completion notification
-                        if from_service:
-                            if synced_count > 0:
-                                send_notification("Bridge Keywords Sync", f"✓ Synced {synced_count} file(s)", "Tags updated successfully")
-                            if error_count > 0:
-                                send_notification("Bridge Keywords Sync", f"⚠️ {error_count} error(s) occurred", "Check logs for details")
+                        # Update session totals
+                        session_synced_count += batch_synced
+                        session_error_count += batch_errors
                         
                         # Clear batch
                         pending_files.clear()
                         last_event_time = None
+                        
+                        # Check if processing session is complete (no more pending files for 3+ seconds)
+                        # Send summary notification after a quiet period
+                        if from_service and processing_started and time.time() - processing_start_time >= 3:
+                            processing_started = False
+                            total_processed = session_synced_count + session_error_count
+                            if total_processed > 0:
+                                if session_error_count == 0:
+                                    send_notification("Bridge Keywords Sync", f"✓ Processed {session_synced_count} file(s)", "Tags updated successfully")
+                                else:
+                                    send_notification("Bridge Keywords Sync", f"Processed {total_processed} file(s)", f"{session_synced_count} synced, {session_error_count} errors")
+                            # Reset counters
+                            session_synced_count = 0
+                            session_error_count = 0
     
     except KeyboardInterrupt:
         print("\n\nStopping file watcher...")
