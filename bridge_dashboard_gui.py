@@ -24,7 +24,7 @@ class BridgeDashboard:
         self.root.title("Bridge Keywords to Tags - Dashboard")
         
         # Set larger size and center on screen
-        window_width = 750
+        window_width = 800
         window_height = 800
         screen_width = root.winfo_screenwidth()
         screen_height = root.winfo_screenheight()
