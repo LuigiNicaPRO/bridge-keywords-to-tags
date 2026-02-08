@@ -114,7 +114,9 @@ MARKER_KEYWORD = "sync"
 STRIP_HIERARCHICAL_PREFIXES = True  
 
 # Replace tags (True) or merge with existing tags (False)
-WATCH_REPLACE_MODE = False  
+# True = Finder tags will exactly match Bridge keywords (recommended)
+# False = New keywords will be added to existing Finder tags
+WATCH_REPLACE_MODE = True  
 ```
 
 3. Save the file

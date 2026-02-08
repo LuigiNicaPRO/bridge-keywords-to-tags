@@ -85,12 +85,12 @@ A comprehensive tool for synchronizing Adobe Bridge/XMP keywords with macOS Find
 **Automatic Metadata Migration**
 - Extracts keywords from Adobe Bridge, Lightroom, and other XMP-compatible applications
 - Copies keywords to macOS Finder tags for system-wide searchability
-- Works with Keywords, Subject, and HierarchicalSubject XMP fields
-- Handles both flat keywords and hierarchical structures
+- Reads from Keywords and Subject XMP fields (matches what Adobe Bridge displays)
+- **Note**: HierarchicalSubject field is intentionally ignored to prevent syncing stale keywords that may remain in files but are no longer shown in Adobe Bridge
 
 **Tag Merge Modes**
 - **Merge Mode** (default): Adds new keywords while preserving existing Finder tags
-- **Replace Mode**: Overwrites existing tags with keywords from files
+- **Replace Mode**: Completely replaces existing tags with current keywords from files (wipes old tags first)
 
 ### 2. Wide File Format Support
 

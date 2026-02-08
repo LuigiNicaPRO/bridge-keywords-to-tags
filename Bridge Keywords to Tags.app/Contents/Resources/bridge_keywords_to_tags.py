@@ -42,7 +42,7 @@ WATCH_DIRECTORIES = [
 ]
 
 # Set to True to replace existing tags, False to merge with existing tags
-WATCH_REPLACE_MODE = False
+WATCH_REPLACE_MODE = True  # Replace mode: tags will exactly match keywords
 
 # Strip parent prefixes from hierarchical keywords (e.g., "Other Keywords|hero" -> "hero")
 # Set to True to use only the leaf keyword, False to keep the full path
@@ -73,7 +73,7 @@ def check_exiftool():
         return False
 
 
-def get_xmp_keywords(file_path: Path, strip_prefixes: bool = STRIP_HIERARCHICAL_PREFIXES) -> list[str]:
+def get_xmp_keywords(file_path: Path, strip_prefixes: bool = STRIP_HIERARCHICAL_PREFIXES, debug: bool = False) -> list[str]:
     """Extract XMP keywords from a file using exiftool."""
     try:
         result = subprocess.run(
@@ -82,8 +82,12 @@ def get_xmp_keywords(file_path: Path, strip_prefixes: bool = STRIP_HIERARCHICAL_
             text=True,
             check=True
         )
+        if debug:
+            print(f"  → exiftool stdout: {result.stdout[:300]}...")
         data = json.loads(result.stdout)
         if not data:
+            if debug:
+                print(f"  → No data returned from exiftool")
             return []
         
         metadata = data[0]
@@ -107,7 +111,13 @@ def get_xmp_keywords(file_path: Path, strip_prefixes: bool = STRIP_HIERARCHICAL_
                     keywords.add(value)
         
         return list(keywords)
-    except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
+    except subprocess.CalledProcessError as e:
+        if debug:
+            print(f"  → exiftool error (exit {e.returncode}): {e.stderr if e.stderr else 'no stderr'}")
+        return []
+    except (json.JSONDecodeError, KeyError) as e:
+        if debug:
+            print(f"  → Exception in get_xmp_keywords: {type(e).__name__}: {e}")
         return []
 
 
@@ -235,27 +245,35 @@ def set_finder_tags_hex(file_path: Path, tags: list[str]) -> bool:
         return False
 
 
-def process_file(file_path: Path, dry_run: bool = False, merge: bool = True, strip_prefixes: bool = STRIP_HIERARCHICAL_PREFIXES) -> tuple[bool, list[str]]:
+def process_file(file_path: Path, dry_run: bool = False, merge: bool = True, strip_prefixes: bool = STRIP_HIERARCHICAL_PREFIXES, debug: bool = False) -> tuple[bool, list[str]]:
     """
     Process a single file: extract XMP keywords and set as Finder tags.
     
     Returns: (success, keywords_found)
     """
-    keywords = get_xmp_keywords(file_path, strip_prefixes=strip_prefixes)
+    keywords = get_xmp_keywords(file_path, strip_prefixes=strip_prefixes, debug=debug)
     
     if not keywords:
+        if debug:
+            print(f"  → No keywords found in file")
         return True, []
     
     # Check for marker keyword if configured
     if MARKER_KEYWORD:
         # Get raw keywords without stripping to check for marker
-        raw_keywords = get_xmp_keywords(file_path, strip_prefixes=False)
+        raw_keywords = get_xmp_keywords(file_path, strip_prefixes=False, debug=debug)
+        if debug:
+            print(f"  → Checking for marker '{MARKER_KEYWORD}' in: {raw_keywords}")
         if MARKER_KEYWORD not in raw_keywords:
             # No marker keyword found, skip this file
+            if debug:
+                print(f"  → Marker keyword '{MARKER_KEYWORD}' not found, skipping file")
             return True, []
         # Remove marker keyword from the tags to be set
         keywords = [k for k in keywords if k.lower() != MARKER_KEYWORD.lower()]
         if not keywords:
+            if debug:
+                print(f"  → No keywords left after removing marker keyword")
             return True, []
     
     if merge:
@@ -604,6 +622,10 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
     # Track last modification times to avoid duplicate processing
     last_processed = {}
     
+    # Batch processing: collect files for 1 second before processing
+    pending_files = set()
+    last_event_time = None
+    
     # Initial scan of all directories
     print("Performing initial scan...")
     for watch_path in watch_paths:
@@ -642,70 +664,81 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
         )
         
         # Process file changes as they're detected
-        for line in process.stdout:
-            changed_path = Path(line.strip())
+        # Use a non-blocking approach with select to batch events
+        import select
+        
+        while True:
+            # Check if data is available (with 2 second timeout for batching)
+            ready, _, _ = select.select([process.stdout], [], [], 2)
             
-            # Debug logging in service mode
-            if from_service:
-                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                print(f"[{timestamp}] Detected change: {changed_path}")
-            
-            # Skip if not a supported file
-            if changed_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                if from_service:
-                    print(f"  → Skipped: unsupported extension {changed_path.suffix}")
-                continue
-            
-            # Skip if file doesn't exist (might have been deleted)
-            if not changed_path.exists():
-                if from_service:
-                    print(f"  → Skipped: file doesn't exist")
-                continue
-            
-            # Check modification time to avoid duplicate processing
-            try:
-                mtime = changed_path.stat().st_mtime
-                last_mtime = last_processed.get(changed_path, 0)
-                time_since_last = mtime - last_mtime
+            if ready:
+                # Read available line
+                line = process.stdout.readline()
+                if not line:
+                    break  # Process ended
+                    
+                changed_path = Path(line.strip())
                 
-                if from_service:
-                    print(f"  → mtime: {mtime}, last_mtime: {last_mtime}, diff: {time_since_last:.2f}s")
-                
-                # Skip if same modification time (duplicate event for same change)
-                if last_mtime > 0 and mtime == last_mtime:
-                    if from_service:
-                        print(f"  → Skipped: duplicate event (same mtime)")
+                # Skip if not a supported file
+                if changed_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                     continue
                 
-                last_processed[changed_path] = mtime
-            except OSError as e:
-                if from_service:
-                    print(f"  → Skipped: OSError {e}")
-                continue
-            
-            # Process the file
-            if from_service:
-                print(f"  → Processing file...")
-            
-            # Small delay to let Adobe Bridge finish writing XMP data
-            time.sleep(2)
-            
-            success, keywords = process_file(changed_path, dry_run=False, merge=merge, strip_prefixes=strip_prefixes)
-            
-            if from_service:
-                print(f"  → Result: success={success}, keywords={keywords}")
-            
-            if success and keywords:
-                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                print(f"[{timestamp}] ✓ Synced: {changed_path.name} → {len(keywords)} tags")
-                if verbose:
-                    print(f"  Tags: {', '.join(keywords)}")
-            elif not success:
-                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                print(f"[{timestamp}] ✗ ERROR processing: {changed_path.name}")
-            elif success and not keywords:
-                if from_service:
-                    print(f"  → No keywords to sync (file may lack marker keyword or have no keywords)")
+                # Skip if file doesn't exist
+                if not changed_path.exists():
+                    continue
+                
+                # Check modification time to avoid duplicate processing
+                try:
+                    mtime = changed_path.stat().st_mtime
+                    last_mtime = last_processed.get(changed_path, 0)
+                    
+                    # Skip if same modification time (duplicate event)
+                    if last_mtime > 0 and mtime == last_mtime:
+                        continue
+                    
+                    last_processed[changed_path] = mtime
+                except OSError:
+                    continue
+                
+                # Add to batch
+                pending_files.add(changed_path)
+                last_event_time = time.time()
+                
+            else:
+                # Timeout - no new events for 2 seconds
+                if pending_files and last_event_time:
+                    # Check if 1 second has passed since last event
+                    if time.time() - last_event_time >= 1:
+                        # Process all pending files
+                        if from_service:
+                            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            print(f"[{timestamp}] Processing {len(pending_files)} file(s)...")
+                        
+                        # Build command to process all files
+                        script_path = Path(__file__).resolve()
+                        files_to_process = list(pending_files)
+                        
+                        for file_path in files_to_process:
+                            try:
+                                result = subprocess.run(
+                                    ['python3', str(script_path), str(file_path), '-v'],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30
+                                )
+                                
+                                if from_service:
+                                    if result.returncode == 0 and 'Files with keywords: 1' in result.stdout:
+                                        print(f"  ✓ Synced: {file_path.name}")
+                                    elif result.returncode != 0:
+                                        print(f"  ✗ ERROR: {file_path.name}")
+                            except Exception as e:
+                                if from_service:
+                                    print(f"  ✗ {file_path.name}: {str(e)[:100]}")
+                        
+                        # Clear batch
+                        pending_files.clear()
+                        last_event_time = None
     
     except KeyboardInterrupt:
         print("\n\nStopping file watcher...")
