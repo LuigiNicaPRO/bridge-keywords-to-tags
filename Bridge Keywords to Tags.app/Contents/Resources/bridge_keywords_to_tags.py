@@ -33,8 +33,12 @@ from datetime import datetime
 #
 WATCH_DIRECTORIES = [
     # Add your directories here (uncomment and edit the examples below):
-    "/Users/nica/Downloads/",
-    "/Users/nica/Downloads/gw-11-2000/",
+    # "/Users/nica/Pictures",
+    "/Users/nica/Downloads/Collection hero 11 front",
+    "/Users/nica/Downloads/gw-11-2000",
+    # Removed large directories to speed up initial scan:
+    # "/Users/nica/Pictures",
+    # "/Users/nica/Downloads",
 ]
 
 # Set to True to replace existing tags, False to merge with existing tags
@@ -625,7 +629,8 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
         sys.exit(1)
     
     # Build fswatch command
-    fswatch_cmd = [fswatch_path, '-r', '--event', 'Updated', '--event', 'Created'] + [str(p) for p in watch_paths]
+    # Watch for Updated (content changes), Created (new files), and AttributeModified (XMP metadata changes)
+    fswatch_cmd = [fswatch_path, '-r', '--event', 'Updated', '--event', 'Created', '--event', 'AttributeModified'] + [str(p) for p in watch_paths]
     
     try:
         process = subprocess.Popen(
