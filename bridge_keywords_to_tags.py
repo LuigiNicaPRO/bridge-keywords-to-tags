@@ -54,6 +54,17 @@ MARKER_KEYWORD = "sync"
 # ============================================================================
 
 
+def send_notification(title: str, message: str, subtitle: str = ""):
+    """Send a macOS notification."""
+    try:
+        script = f'display notification "{message}" with title "{title}"'
+        if subtitle:
+            script = f'display notification "{message}" with title "{title}" subtitle "{subtitle}"'
+        subprocess.run(['osascript', '-e', script], capture_output=True, check=False)
+    except Exception:
+        pass  # Silently fail if notifications don't work
+
+
 # File extensions to process (common image/video formats that support XMP)
 SUPPORTED_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.tiff', '.tif', '.gif', '.bmp',
@@ -574,7 +585,10 @@ def service_restart() -> bool:
                    capture_output=True, check=False)
     time.sleep(1)
     print("Starting service...")
-    return service_start()
+    result = service_start()
+    if result:
+        send_notification("Bridge Keywords Sync", "Service restarted", "Ready to sync keywords")
+    return result
 
 
 def service_logs(follow: bool = False):
@@ -618,12 +632,13 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
         print(f"Strip hierarchical prefixes: {'enabled' if strip_prefixes else 'disabled'}")
         print("\nPress Ctrl+C to stop\n")
     else:
-        # Service mode - log startup
+        # Service mode - log startup and send notification
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Service started")
         print(f"Watching {len(watch_paths)} director{'y' if len(watch_paths) == 1 else 'ies'}:")
         for path in watch_paths:
             print(f"  - {path}")
         print(f"Strip hierarchical prefixes: {'enabled' if strip_prefixes else 'disabled'}")
+        send_notification("Bridge Keywords Sync", "Service started", f"Watching {len(watch_paths)} folder(s)")
     
     # Track last modification times to avoid duplicate processing
     last_processed = {}
@@ -716,13 +731,17 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
                     # Check if 1 second has passed since last event
                     if time.time() - last_event_time >= 1:
                         # Process all pending files
+                        num_files = len(pending_files)
                         if from_service:
                             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            print(f"[{timestamp}] Processing {len(pending_files)} file(s)...")
+                            print(f"[{timestamp}] Processing {num_files} file(s)...")
+                            send_notification("Bridge Keywords Sync", f"Processing {num_files} file(s)...", "Syncing keywords to tags")
                         
                         # Build command to process all files
                         script_path = Path(__file__).resolve()
                         files_to_process = list(pending_files)
+                        synced_count = 0
+                        error_count = 0
                         
                         for file_path in files_to_process:
                             try:
@@ -741,11 +760,24 @@ def watch_directories(watch_paths: list[Path], merge: bool = True, verbose: bool
                                 if from_service:
                                     if result.returncode == 0 and 'Files with keywords: 1' in result.stdout:
                                         print(f"  ✓ Synced: {file_path.name}")
+                                        synced_count += 1
+                                    elif result.returncode == 0 and 'Files with keywords: 0' in result.stdout:
+                                        # File processed but no keywords (tags cleared in replace mode)
+                                        synced_count += 1
                                     elif result.returncode != 0:
                                         print(f"  ✗ ERROR: {file_path.name}")
+                                        error_count += 1
                             except Exception as e:
                                 if from_service:
                                     print(f"  ✗ {file_path.name}: {str(e)[:100]}")
+                                    error_count += 1
+                        
+                        # Send completion notification
+                        if from_service:
+                            if synced_count > 0:
+                                send_notification("Bridge Keywords Sync", f"✓ Synced {synced_count} file(s)", "Tags updated successfully")
+                            if error_count > 0:
+                                send_notification("Bridge Keywords Sync", f"⚠️ {error_count} error(s) occurred", "Check logs for details")
                         
                         # Clear batch
                         pending_files.clear()
