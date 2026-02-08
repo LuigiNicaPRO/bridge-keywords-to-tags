@@ -139,7 +139,7 @@ WATCH_DIRECTORIES = [
     "/Users/nica/Downloads",
 ]
 
-WATCH_REPLACE_MODE = False  # False = merge, True = replace
+WATCH_REPLACE_MODE = True  # True = replace (recommended), False = merge
 STRIP_HIERARCHICAL_PREFIXES = True  # "Other Keywords|hero" → "hero"
 MARKER_KEYWORD = "sync"  # Only process files with this keyword, or None for all
 ```
@@ -316,6 +316,25 @@ for path in ['/opt/homebrew/bin/fswatch', '/usr/local/bin/fswatch', '/usr/bin/fs
         fswatch_path = path
         break
 ```
+
+### XMP Keyword Extraction
+The system only reads Keywords and Subject XMP fields. HierarchicalSubject is intentionally ignored to avoid syncing stale keywords that Adobe Bridge no longer displays.
+
+### Tag Clearing in Replace Mode
+`set_finder_tags()` clears all tags when given an empty list (uses `xattr -d` to remove the attribute). This is critical for replace mode when files have only the marker keyword.
+
+### macOS Notifications
+The service sends notifications using AppleScript:
+- "Service started" / "Service restarted"
+- "Processing started" when first file detected
+- "✓ Processed X file(s)" after completion (totals across all batches)
+- Tracks session statistics across multiple file batches
+
+### Code Optimizations
+- Consolidated duplicate `set_finder_tags()` functions
+- Eliminated duplicate `exiftool` calls by caching keywords
+- Extracted XMP sidecar logic to `process_xmp_sidecar()` function
+- All optimizations maintain backward compatibility
 
 ## Testing Workflow
 

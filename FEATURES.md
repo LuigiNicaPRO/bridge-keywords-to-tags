@@ -208,6 +208,14 @@ python3 bridge_keywords_to_tags.py service-start
 - Comprehensive logging to `~/Library/Logs/bridge-keywords-watcher.log`
 - Separate error log for troubleshooting
 
+**macOS Notifications**
+- Visual feedback for all service events
+- Service lifecycle: "Service started", "Service restarted"
+- Processing status: "Processing started" when files detected
+- Completion summary: "✓ Processed X file(s)" with success/error counts
+- Appears in macOS Notification Center
+- Non-intrusive background updates
+
 ### 7. Hierarchical Keyword Support
 
 **Automatic Prefix Stripping**
